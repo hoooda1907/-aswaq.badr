@@ -1,9 +1,10 @@
+import json
 import os
 import sqlite3
 from datetime import datetime
 
 from .auth import hash_password
-from .constants import DEFAULT_REQ_HOURS, DEFAULT_GRACE_MIN
+from .constants import DEFAULT_REQ_HOURS, DEFAULT_GRACE_MIN, DEFAULT_FP_RULES
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY COLLATE NOCASE, salt TEXT, hash TEXT);
@@ -15,8 +16,9 @@ CREATE TABLE IF NOT EXISTS payroll(
   insurance REAL DEFAULT 0, advance REAL DEFAULT 0, leave_days INTEGER DEFAULT 0,
   req_hours REAL DEFAULT 10, grace_min INTEGER DEFAULT 20, ot_rate REAL DEFAULT 1,
   ot_manual REAL, shift_mode TEXT DEFAULT 'auto', leave_paid INTEGER DEFAULT 1,
-  deduct_short INTEGER DEFAULT 0, notes TEXT DEFAULT '',
+  deduct_short INTEGER DEFAULT 0, notes TEXT DEFAULT '', fp_manual REAL,
   PRIMARY KEY(branch, ym, code));
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 """
 
 CARRY = ("salary", "allowances", "insurance", "advance", "req_hours", "grace_min",
@@ -33,7 +35,30 @@ class Database:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(payroll)")}
+        if "fp_manual" not in cols:          # ترقية قواعد البيانات القديمة
+            self.conn.execute("ALTER TABLE payroll ADD COLUMN fp_manual REAL")
         self.conn.commit()
+
+    # ---------------- الإعدادات
+    def get_setting(self, key, default=None):
+        r = self.conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return r[0] if r else default
+
+    def set_setting(self, key, value):
+        self.conn.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (key, value))
+        self.conn.commit()
+
+    def fp_rules(self):
+        rules = dict(DEFAULT_FP_RULES)
+        try:
+            rules.update(json.loads(self.get_setting("fp_rules") or "{}"))
+        except ValueError:
+            pass
+        return rules
+
+    def set_fp_rules(self, rules):
+        self.set_setting("fp_rules", json.dumps({k: rules[k] for k in DEFAULT_FP_RULES}))
 
     # ---------------- المستخدمون
     def user_count(self):
@@ -128,7 +153,7 @@ class Database:
 
     def save_employee(self, e):
         keys = ["name", "salary", "allowances", "penalties", "insurance", "advance", "leave_days", "req_hours",
-                "grace_min", "ot_rate", "ot_manual", "shift_mode", "leave_paid", "deduct_short", "notes"]
+                "grace_min", "ot_rate", "ot_manual", "shift_mode", "leave_paid", "deduct_short", "notes", "fp_manual"]
         self.conn.execute(
             "UPDATE payroll SET %s WHERE branch=? AND ym=? AND code=?" % ",".join(k + "=?" for k in keys),
             [e.get(k) for k in keys] + [e["branch"], e["ym"], e["code"]])

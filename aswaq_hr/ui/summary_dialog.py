@@ -50,7 +50,7 @@ class SummaryDialog(QDialog):
                 ("إجمالي مبلغ السلف", tot["advance"]),
                 ("المبلغ المطلوب بعد خصم السلف", tot["net"]),
                 ("إجمالي التأمينات", tot["insurance"]), ("إجمالي البدلات", tot["allowances"]),
-                ("إجمالي الوقت الإضافي", tot["ot_pay"]), ("إجمالي الجزاءات", tot["penalties"]),
+                ("إجمالي الوقت الإضافي", tot["ot_pay"]), ("إجمالي الجزاءات", tot["penalties_total"]),
                 ("إجمالي خصم الغياب والإجازات", tot["absence_ded"] + tot["leave_ded"] + tot["short_ded"])]
         for i, (a, b) in enumerate(rows):
             lb = QLabel(a)

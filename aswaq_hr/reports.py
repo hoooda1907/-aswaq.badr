@@ -50,6 +50,10 @@ def voucher_html(branch, ym, emp, s, pay, logo_name="logo"):
     ded = [("خصم أيام الغياب (%d يوم)" % pay["absent"], money(pay["absence_ded"])),
            ("الجزاءات", money(pay["penalties"])), ("خصم التأمينات", money(pay["insurance"])),
            ("السلف", money(pay["advance"]))]
+    if pay["fp_count"] or pay["fp_amount"]:
+        lbl = "جزاء نسيان البصمة (%d بصمة منسية" % pay["fp_count"]
+        lbl += " = %s يوم)" % ("%g" % pay["fp_days"]) if not pay["fp_edited"] else ") — معدّل يدوياً"
+        ded.insert(2, (lbl, money(pay["fp_amount"])))
     if pay["leave_ded"]:
         ded.append(("خصم الإجازة بدون أجر (%d يوم)" % pay["leave"], money(pay["leave_ded"])))
     if pay["short_ded"]:
@@ -63,7 +67,11 @@ def voucher_html(branch, ym, emp, s, pay, logo_name="logo"):
     html.append("<table width='100%%' border='1' cellspacing='0' cellpadding='4'><tr><th>الكود</th><td>%s</td><th>الاسم</th><td>%s</td><th>الفرع</th><td>%s</td></tr></table><br>"
                 % (e(emp["code"]), e(emp["name"]), e(branch)))
     html.append("<table width='100%' border='1' cellspacing='0' cellpadding='4'><tr><td colspan='2' class='sec' align='center'>بيانات الحضور</td></tr>")
+    html.append(_row("نظام الشيفت", s.shift_label or "—"))
     html.append(_row("أيام الحضور", s.present))
+    html.append(_row("عدد بصمات الدخول", s.in_punches))
+    html.append(_row("عدد بصمات الخروج", s.out_punches))
+    html.append(_row("عدد البصمات الناقصة", s.missing_punches))
     html.append(_row("أيام الراحة الأسبوعية المستحقة", s.rest))
     html.append(_row("إجازة بإذن", pay["leave"]))
     html.append(_row("أيام الغياب", pay["absent"]))
@@ -82,6 +90,8 @@ def voucher_html(branch, ym, emp, s, pay, logo_name="logo"):
                 "<td style='border:none' align='center'>توقيع المحاسب<br><br>.....................</td>"
                 "<td style='border:none' align='center'>توقيع المدير<br><br>.....................</td>"
                 "<td style='border:none' align='center'>توقيع المستلم<br><br>.....................</td></tr></table>")
+    if (emp.get("notes") or "").strip():
+        html.append("<br><table width='100%%' border='1' cellspacing='0' cellpadding='4'><tr><th width='15%%'>ملاحظات</th><td>%s</td></tr></table>" % e(emp["notes"]))
     html.append("<p class='small' align='center'>%s — %s</p></body></html>" % (e(APP_NAME), e(DEVELOPER)))
     return "".join(html)
 
@@ -97,12 +107,12 @@ def vouchers_html(branch, ym, items, logo_name="logo"):
 
 
 SUMMARY_COLS = [("الكود", None), ("الاسم", None), ("الأساسي", "salary"), ("البدلات", "allowances"),
-                ("الإضافي", "ot_pay"), ("خصم الغياب", "absence_ded"), ("الجزاءات", "penalties"),
+                ("الإضافي", "ot_pay"), ("خصم الغياب", "absence_ded"), ("الجزاءات", "penalties_total"),
                 ("التأمينات", "insurance"), ("السلف", "advance"), ("الصافي", "net")]
 
 
 def totals_of(items):
-    keys = ["salary", "allowances", "ot_pay", "absence_ded", "leave_ded", "short_ded", "penalties",
+    keys = ["salary", "allowances", "ot_pay", "absence_ded", "leave_ded", "short_ded", "penalties", "fp_amount", "penalties_total",
             "insurance", "advance", "gross", "total_ded", "net"]
     t = {k: 0.0 for k in keys}
     for _, _, _, pay in items:
@@ -133,7 +143,7 @@ def summary_html(branch, ym, items, logo_name="logo"):
     h.append(_row("إجمالي التأمينات", money(t["insurance"])))
     h.append(_row("إجمالي البدلات", money(t["allowances"])))
     h.append(_row("إجمالي الوقت الإضافي", money(t["ot_pay"])))
-    h.append(_row("إجمالي الجزاءات", money(t["penalties"])))
+    h.append(_row("إجمالي الجزاءات", money(t["penalties_total"])))
     h.append(_row("إجمالي خصم الغياب والإجازات", money(t["absence_ded"] + t["leave_ded"] + t["short_ded"])))
     h.append("</table><p class='small' align='center'>%s</p></body></html>" % escape(DEVELOPER))
     return "".join(h)
@@ -158,7 +168,7 @@ def export_summary_xlsx(path, branch, ym, items):
     for emp, _, s, p in items:
         ws.append([emp["code"], emp["name"], s.present, s.rest, p["leave"], p["absent"],
                    round(s.total_hours, 2), round(s.avg_hours, 2), p["salary"], p["allowances"], p["ot_pay"],
-                   p["absence_ded"] + p["leave_ded"] + p["short_ded"], p["penalties"], p["insurance"],
+                   p["absence_ded"] + p["leave_ded"] + p["short_ded"], p["penalties_total"], p["insurance"],
                    p["advance"], p["net"]])
     n = len(items) + 2
     ws.append(["", "الإجمالي"] + [""] * 6 + ["=SUM(%s3:%s%d)" % (c, c, n) for c in "IJKLMNOP"])

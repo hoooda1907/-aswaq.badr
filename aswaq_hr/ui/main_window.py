@@ -1,19 +1,23 @@
 from collections import Counter
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
                                QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMenu,
                                QToolButton, QDialog, QFormLayout, QAbstractItemView)
 
 from .. import APP_NAME, reports
 from ..excel_reader import read_table, extract_punches, ReadError
+from ..employee_import import parse_employee_sheet, apply_employee_data, report_text
+from .. import templates
 from ..service import compute_all
 from .common import logo_label, signature_label, info, warn, ask, print_preview
 from .employee_dialog import EmployeeDialog
 from .summary_dialog import SummaryDialog
 from .login import ChangePasswordDialog, UsersDialog
+from .rules_dialog import FpRulesDialog
 
-COLS = ["الكود", "الاسم", "أيام الحضور", "الراحة", "إجازة", "غياب", "إجمالي الساعات", "متوسط الساعات", "صافي المرتب"]
+COLS = ["الكود", "الاسم", "الشيفت", "أيام الحضور", "بصمات الدخول", "بصمات الخروج", "بصمات ناقصة", "الراحة", "إجازة", "غياب", "إجمالي الساعات", "متوسط الساعات", "صافي المرتب"]
 
 
 class AddEmployeeDialog(QDialog):
@@ -71,6 +75,16 @@ class MainWindow(QMainWindow):
             bar.addWidget(b)
             return b
         mk("استيراد شيت البصمة", self.import_sheet)
+        mk("استيراد بيانات الموظفين", self.import_employees)
+        tb = QToolButton()
+        tb.setText("تصدير شيت فارغ ▾")
+        tb.setPopupMode(QToolButton.InstantPopup)
+        tm = QMenu(tb)
+        tm.addAction("شيت بيانات الموظفين (فارغ)", self.export_employee_template)
+        tm.addAction("شيت البصمات (فارغ)", self.export_punch_template)
+        tb.setMenu(tm)
+        bar.addWidget(tb)
+        mk("قواعد نسيان البصمة", self.open_fp_rules, "secondary")
         mk("إجمالي المرتبات", self.open_summary)
         mk("طباعة كل السندات", self.print_all, "secondary")
         mk("إضافة موظف", self.add_employee, "secondary")
@@ -139,11 +153,17 @@ class MainWindow(QMainWindow):
         self.items = compute_all(self.db, self.branch, self.ym)
         self.tbl.setRowCount(len(self.items))
         for r, (emp, days, s, pay) in enumerate(self.items):
-            vals = [emp["code"], emp["name"], s.present, s.rest, pay["leave"], pay["absent"],
+            vals = [emp["code"], emp["name"], s.shift_label, s.present, s.in_punches, s.out_punches,
+                    s.missing_punches, s.rest, pay["leave"], pay["absent"],
                     reports.hrs(s.total_hours), reports.hrs(s.avg_hours), reports.money(pay["net"])]
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(str(v))
                 it.setTextAlignment(Qt.AlignCenter if c != 1 else Qt.AlignVCenter | Qt.AlignRight)
+                if c == 2 and s.last_shift:
+                    mixed = bool(s.day_shifts and s.night_shifts)
+                    it.setBackground(QColor("#fdebd0" if mixed else "#d6eaf8" if s.last_shift == "night" else "#fef9e7"))
+                if c == 6 and v:
+                    it.setBackground(QColor("#fff3cd"))
                 self.tbl.setItem(r, c, it)
         self.apply_filter()
         self.status.setText("عدد الموظفين: %d   |   اضغط مرتين على الموظف لعرض الحضور والمرتب" % len(self.items))
@@ -184,6 +204,51 @@ class MainWindow(QMainWindow):
         self.db.replace_punches(self.branch, punches)
         self.load_months(select=months.most_common(1)[0][0])
         info(self, "تم استيراد الشيت بنجاح")
+
+    def import_employees(self):
+        if not self.ym:
+            return warn(self, "استورد شيت البصمة أولاً لتحديد الشهر")
+        path, _ = QFileDialog.getOpenFileName(self, "اختر شيت بيانات الموظفين", "",
+                                              "ملفات Excel (*.xlsx *.xls *.csv);;كل الملفات (*)")
+        if not path:
+            return
+        try:
+            cols, recs, warns = parse_employee_sheet(read_table(path))
+        except ReadError as e:
+            return warn(self, str(e))
+        except Exception as e:
+            return warn(self, "تعذر قراءة الملف:\n%s" % e)
+        label = reports.month_label(self.ym)
+        if not ask(self, "تم التعرف على %d موظف.\nسيتم تطبيق البيانات على شهر %s — فرع %s.\n"
+                         "(الأعمدة غير الموجودة في الشيت لن تتغير)\n\nهل تريد المتابعة؟" % (len(recs), label, self.branch),
+                   "استيراد بيانات الموظفين"):
+            return
+        try:
+            rep = apply_employee_data(self.db, self.branch, self.ym, cols, recs)
+        except Exception as e:
+            return warn(self, "حدث خطأ أثناء الاستيراد:\n%s" % e)
+        self.refresh()
+        info(self, report_text(label, cols, rep, warns))
+
+    def _save_template(self, title, default, fn):
+        path, _ = QFileDialog.getSaveFileName(self, title, default, "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            fn(path)
+            info(self, "تم التصدير:\n" + path)
+        except Exception as e:
+            warn(self, "تعذر التصدير: %s" % e)
+
+    def export_employee_template(self):
+        self._save_template("تصدير شيت بيانات الموظفين", "شيت_بيانات_الموظفين.xlsx", templates.export_employee_template)
+
+    def export_punch_template(self):
+        self._save_template("تصدير شيت البصمات", "شيت_البصمات.xlsx", templates.export_punch_template)
+
+    def open_fp_rules(self):
+        if FpRulesDialog(self.db, self).exec() == QDialog.Accepted:
+            self.refresh()
 
     def open_employee(self, row, _col):
         code = self.tbl.item(row, 0).text()
