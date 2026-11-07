@@ -1,7 +1,20 @@
 import os
 import sys
 
-from PySide6.QtCore import Qt
+try:
+    from PySide6.QtCore import Qt
+except ImportError as _e:   # عادةً: مكتبات Visual C++ ناقصة على الجهاز
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "تعذر تحميل مكتبات الواجهة (Qt).\n\nالحل: ثبّت Microsoft Visual C++ Redistributable (x64) ثم أعد تشغيل البرنامج:\n"
+            "https://aka.ms/vs/17/release/vc_redist.x64.exe\n\n"
+            "ملاحظة: البرنامج يحتاج ويندوز 10 (64 بت) أو أحدث.\n\nالتفاصيل: %s" % _e,
+            "Aswaq Badr HR", 0x10)
+    except Exception:
+        pass
+    sys.exit(1)
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QDialog
 
